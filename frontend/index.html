@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Otimizador de Rotas da Caro</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+<style>
+body { font-family: Arial; margin:0; }
+
+#map { height: 65vh; }
+
+#controls {
+  padding:10px;
+  background:#f4f4f4;
+}
+
+textarea {
+  width:100%;
+  font-size:14px;
+  padding:5px;
+}
+
+button {
+  padding:8px;
+  margin-top:5px;
+  border:none;
+  color:white;
+  border-radius:5px;
+  cursor:pointer;
+}
+
+#calc { background:#007bff; }
+#google { background:#34A853; }
+#waze { background:#1F9DE7; }
+
+.marker-number {
+  background:#007bff;
+  color:white;
+  border-radius:50%;
+  width:28px;
+  height:28px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:bold;
+}
+
+#invalid {
+  color:red;
+  padding:15px;
+  background:#fff;
+  white-space: pre-line;
+}
+</style>
+</head>
+
+<body>
+
+<div id="controls">
+  <h2>🚀 Otimizador de Rotas da Caro</h2>
+
+  <textarea id="addresses" rows="5"
+placeholder="Digite um endereço por linha"></textarea>
+
+  <button id="calc">Calcular</button>
+
+  <p id="info"></p>
+
+  <div id="nav" style="display:none;">
+    <button id="google">Google Maps</button>
+    <button id="waze">Waze</button>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<!-- AGORA FICA ABAIXO DO MAPA -->
+<div id="invalid"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@mapbox/polyline"></script>
+
+<script>
+
+let map = L.map('map').setView([-23.55,-46.63],12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+let markers = [];
+let routeLine = null;
+
+function formatTime(s){
+  let h = Math.floor(s/3600);
+  let m = Math.round((s%3600)/60);
+  return h>0 ? `${h}h ${m}min` : `${m} min`;
+}
+
+function createNumberIcon(num){
+  return L.divIcon({
+    className:'',
+    html:`<div class="marker-number">${num}</div>`,
+    iconSize:[30,30]
+  });
+}
+
+async function optimize(payload){
+
+  document.getElementById("info").innerText = "Calculando rota...";
+  document.getElementById("invalid").innerText = "";
+  document.getElementById("nav").style.display = "none";
+
+  const res = await fetch("http://127.0.0.1:8000/optimize",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+
+  if(data.error){
+    document.getElementById("info").innerText = data.error;
+    return;
+  }
+
+  drawRoute(data);
+
+  if(data.invalid && data.invalid.length > 0){
+    document.getElementById("invalid").innerText =
+      "⚠️ Endereços ignorados:\n\n" + data.invalid.join("\n");
+  }
+}
+
+function drawRoute(data){
+
+  markers.forEach(m=>map.removeLayer(m));
+  markers=[];
+  if(routeLine) map.removeLayer(routeLine);
+
+  data.coords.forEach((c,i)=>{
+    const marker = L.marker([c[1],c[0]],{
+      draggable:true,
+      icon:createNumberIcon(i+1)
+    }).addTo(map)
+    .bindPopup(`<b>${i+1}</b><br>${data.addresses[i]}`);
+
+    marker.on("dragend", ()=>{
+      const newCoords = markers.map(m=>{
+        let p = m.getLatLng();
+        return [p.lng,p.lat];
+      });
+      optimize({coords:newCoords});
+    });
+
+    markers.push(marker);
+  });
+
+  const decoded = polyline.decode(data.geometry);
+  const latlngs = decoded.map(p=>[p[0],p[1]]);
+  routeLine = L.polyline(latlngs,{color:"blue", weight:5}).addTo(map);
+
+  map.fitBounds(routeLine.getBounds());
+
+  // EMOJIS AQUI
+  document.getElementById("info").innerText =
+    `🗺️ ${(data.distance/1000).toFixed(2)} km  |  ⏱️ ${formatTime(data.duration)}`;
+
+  const gm = "https://www.google.com/maps/dir/" +
+    data.coords.map(c=>`${c[1]},${c[0]}`).join("/");
+
+  document.getElementById("google").onclick=()=>window.open(gm,"_blank");
+
+  const wz = `https://waze.com/ul?ll=${data.coords[0][1]},${data.coords[0][0]}&navigate=yes`;
+  document.getElementById("waze").onclick=()=>window.open(wz,"_blank");
+
+  document.getElementById("nav").style.display="block";
+}
+
+document.getElementById("calc").onclick = () => {
+  const addresses = document.getElementById("addresses")
+    .value.split("\n")
+    .map(a => a.trim())
+    .filter(a => a);
+
+  optimize({addresses});
+};
+
+</script>
+
+</body>
+</html>
